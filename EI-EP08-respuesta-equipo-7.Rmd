@@ -1,0 +1,235 @@
+---
+title: "Tarea 8"
+author: "Grupo 7"
+date: "2023-11-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(lmboot)
+library(ggpubr)
+datos = read.csv2("EP08 Datos CASEN 2017.csv", sep=";", fileEncoding = "latin1")
+```
+
+1) ¿Es similar la cantidad de hogares que perciben ingresos superiores a 500.000 clp en la región de Tarapacá y de Santiago?
+
+$H_0$: La proporción de hogares que percibe ingresos superiores a 500.000 clp en la región de Tarapacá es igual a la de Santiago.
+<br>
+$H_a$: La proporción de hogares que percibe ingresos superiores a 500.000 clp en la región de Tarapacá no es igual a la de Santiago.
+
+
+```{r}
+obtiene_permutacion <- function(i, muestra_1, muestra_2){
+  n_1 <- length(muestra_1)
+  combinada <- c(muestra_1, muestra_2)
+  n <- length(combinada)
+  permutacion <- sample(combinada, n ,replace = FALSE)
+  nueva_1 <- permutacion[1:n_1]
+  nueva_2 <- permutacion[(n_1+1):n]
+  return(list(nueva_1, nueva_2))
+}
+
+calcular_diferencia <- function(muestras, FUN) {
+  muestra_1 <- muestras[[1]]
+  muestra_2 <- muestras[[2]]
+  diferencia <- FUN(muestra_1) - FUN(muestra_2)
+  return(diferencia)
+}
+
+calcular_valor_p <- function(distribucion, valor_observado, 
+                             repeticiones, alternative) {
+  if(alternative == "two.sided") {
+    numerador <- sum(abs(distribucion) > abs(valor_observado)) + 1
+  }
+  else if (alternative == "greater") {
+    numerador <- sum(distribucion > valor_observado) + 1
+  }
+  else {
+    numerador <- sum(distribucion < valor_observado) + 1
+  }
+  denominador <- repeticiones + 1
+  valor_p <- numerador / denominador
+  return(valor_p)
+}
+
+graficar_distribucion <- function(distribucion, ...){
+  observaciones <- data.frame(distribucion)
+  
+  histograma <- gghistogram(observaciones, x = "distribucion",
+                             xlab = "Estadistico de Interes",
+                             ylab = "Frecuencia", bins = 30, ...)
+  qq <- ggqqplot(observaciones, x = "distribucion", ...)
+  figura <- ggarrange(histograma, qq, ncol = 2, nrow = 1)
+  print(figura)
+}
+
+contrastar_hipotesis_permutaciones <- function(muestra_1, muestra_2,
+                                               repeticiones, FUN, alternative,
+                                               plot, ...){
+  cat("Prueba de permutaciones\n\n")
+  cat("Hipotesis alternative:", alternative, "\n")
+  observado <- calcular_diferencia(list(muestra_1, muestra_2), FUN)
+  cat("Valor observado:", observado, "\n")
+  n_1 <- length(muestra_1)
+  
+  permutaciones <- lapply(1:repeticiones, obtiene_permutacion, muestra_1, 
+                          muestra_2)
+  distribucion <- sapply(permutaciones, calcular_diferencia, FUN)
+  if (plot) {
+    graficar_distribucion(distribucion, ...)
+  }
+  
+  valor_p <- calcular_valor_p(distribucion, observado, repeticiones, 
+                              alternative)
+  cat("Valor p:", valor_p, "\n\n")
+}
+
+# Parámetros
+sueldo_corte = 500000;
+set.seed(1234);
+N_iter = 2000;
+N_MC = 120;
+
+# Filtro de datos
+tarapaca = datos[datos$region == "Región de Tarapacá",];
+metropol = datos[datos$region == "Región Metropolitana de Santiago",];
+
+# Muestreo
+tarapaca = tarapaca[sample(nrow(tarapaca), N_MC),];
+metropol = metropol[sample(nrow(metropol), N_MC),];
+
+razon <-function(a){
+  prop <- table(a >= sueldo_corte);
+  return(prop[[1]]/prop[[2]])
+}
+
+contrastar_hipotesis_permutaciones(tarapaca$ytotcorh, metropol$ytotcorh, repeticiones = N_iter, FUN = razon, alternative = "two.sided", plot = TRUE, color = "blue", fill = "blue")
+
+```
+
+Usando la simulación de Monte Carlo, se pudo obtener una diferencia de las proporciones estadisticamente significativa al ser el p-value < 0.05, por lo que se rechaza que la proporción de cantidad de personas por hogar que ganan mas de $500.000 por hogar sea igual entre las regiones de Tarapacá y Santiago.
+
+<br>
+
+
+2) ¿Es similar la cantidad de personas por hogar en cada macro región?
+
+$H_0$: La diferencia entre los promedios de cantidad de personas por hogar en cada región son iguales.
+<br>
+$H_a$: La diferencia entre los promedios de cantidad de personas por hogar en cada región son distintos.
+
+```{r}
+# Parámetros
+set.seed(4321);
+N_B = 2000;
+N_datos = 250;
+grupos = 3;
+
+ajustarF = function(general, especifico){
+  return(
+    mean(general) + (especifico - mean(especifico)) * sd(general) / sd(especifico)
+  )
+}
+
+# Se filtran los datos
+hogares = datos[!is.na(datos$numper),];
+hogares = hogares[sample(nrow(hogares), N_datos),]
+
+# Arreglo con estadistico F
+f_boot = c();
+for(i in 1:N_B){
+  # Muestreo Bootstrap
+  hogares_simul = hogares[sample(N_datos, N_datos, replace = TRUE),];
+  
+  # Agrupación de cada dato
+  maule = hogares_simul[hogares_simul$region == "Región del Maule",]$numper;
+  valparaiso = hogares_simul[hogares_simul$region == "Región de Valparaíso",]$numper;
+  santiago = hogares_simul[hogares_simul$region == "Región Metropolitana de Santiago",]$numper;
+  
+  # Ajuste de la muestra para validar H nula
+  maule = ajustarF(hogares$numper, maule);
+  valparaiso = ajustarF(hogares$numper, valparaiso);
+  santiago = ajustarF(hogares$numper, santiago);
+  
+  # Calculo de varianza entre grupos y por grupos
+  prom_datos = mean(hogares_simul$numper);
+  varianza_entre = (length(maule) * (mean(maule) - prom_datos) ^ 2 + length(valparaiso) * (mean(valparaiso) - prom_datos) ^ 2 + length(santiago) * (mean(santiago) - prom_datos) ^ 2) / (grupos - 1);
+  varianza_inter = (var(maule) * (length(maule) - 1) + var(valparaiso) * (length(valparaiso) - 1) + var(santiago) * (length(santiago) - 1)) / (N_datos - grupos);
+  
+  # Calculo de estadistico F de la remuestra
+  f_boot = c(varianza_entre / varianza_inter, f_boot);
+}
+
+# Grafico de distribución de F por bootstrapping
+gghistogram(f_boot, xlab = "Estadistico F", ylab = "Frecuencia");
+
+# F critico donde se rechaza la hipotesis nula
+f_critico = qf(0.05, grupos - 1, N_datos - grupos, lower.tail = FALSE);
+
+# Comparación de los F remuestreados y el valor critico
+comparaciones = table(f_boot >= f_critico);
+
+# Obtención de p-value
+p_valor = comparaciones[[1]] / (comparaciones[[1]] + comparaciones[[2]]);
+
+print(p_valor);
+```
+
+Al ser el p-valor mayor al nivel de significancia 0.05, no se tiene suficiente evidencia estadisticamente significativa como para rechazar que la diferencia de cantidad de personas promedio por hogar entre las regiones es igual.
+
+<br>
+
+Analisis posthoc.
+
+```{r}
+# Función para calcular estadistico t de la diferencia entre dos grupos por Bootstrap
+bootstrapT = function(N_B, N_datos, datos, region_a, region_b){
+  A_real = datos[datos$region == region_a,]$numper;
+  B_real = datos[datos$region == region_b,]$numper;
+  
+  t_boot = c();
+  for(i in 1:N_B){
+    # Remuestreo Bootstrap
+    hogares_simul = datos[sample(N_datos, N_datos, replace = TRUE),];
+    
+    # Agrupación
+    A = hogares_simul[hogares_simul$region == region_a,]$numper;
+    B = hogares_simul[hogares_simul$region == region_b,]$numper;
+    
+    # Calculo de t a partir del remuestreo
+    t_boot = c(
+      (mean(A) - mean(B)) / (sqrt(var(A) / length(A) + var(B) / length(B))), 
+      t_boot
+    );
+  }
+  
+  # Calculo del valor limite de t a partir de los datos reales
+  intervalo_conf = qt(
+    0.025, 
+    (var(A_real) / length(A_real) + var(B_real) / length(B_real)) ^ 2 / ((var(A_real) / length(A_real)) ^ 2 / (length(A_real) - 1) + (var(B_real) / length(B_real)) ^ 2 / (length(B_real) - 1))
+  );
+  
+  # Tabla comparativa para obtener p-valor
+  comparaciones = table(abs(t_boot) >= abs(intervalo_conf));
+  
+  # Calculo de p-valor
+  p_valor = comparaciones[[1]] / (comparaciones[[1]] + comparaciones[[2]])
+  
+  return(p_valor);
+}
+
+# Posthoc por cada par de grupos
+print(bootstrapT(N_B, N_datos, hogares, "Región del Maule", "Región Metropolitana de Santiago"));
+print(bootstrapT(N_B, N_datos, hogares, "Región del Maule", "Región de Valparaíso"));
+print(bootstrapT(N_B, N_datos, hogares, "Región de Valparaíso", "Región Metropolitana de Santiago"));
+
+```
+
+Tal como lo muestra la prueba omnibus hecha anteriormente, no se aprecia ninguna diferencia estadisticamente significativa en ninguno de los grupos.
+
+
+
+
+
+
